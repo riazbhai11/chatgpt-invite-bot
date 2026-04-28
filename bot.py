@@ -33,8 +33,7 @@ def extract_from_json(text: str) -> dict:
 
 def send_invite(email: str, access_token: str, workspace_id: str) -> tuple:
     url = f"https://chatgpt.com/backend-api/accounts/{workspace_id}/invites"
-    
-    # Full browser-like headers
+
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json",
@@ -53,35 +52,53 @@ def send_invite(email: str, access_token: str, workspace_id: str) -> tuple:
         "Oai-Language": "en-US",
         "Oai-Device-Id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
     }
-    
+
     payload = {
         "email_addresses": [email],
         "resend_emails": True,
         "role": "standard-user",
         "seat_type": "default"
     }
-    
+
     session = requests.Session()
     session.headers.update(headers)
-    
+
     try:
         response = session.post(url, json=payload, timeout=30)
         logging.info(f"Status: {response.status_code} | Response: {response.text[:300]}")
-        
+
         if response.status_code in [200, 201]:
-            data = response.json()
+            # Response empty হলেও success ধরো
+            if not response.text or response.text.strip() == "":
+                return False, "token_expired"
+
+            try:
+                data = response.json()
+            except:
+                return False, "token_expired"
+
+            # errored_emails চেক করো
             if data.get("errored_emails"):
                 error = data["errored_emails"][0].get("error", "Unknown error")
                 return False, f"❌ {error}"
-            if data.get("account_invites"):
-                return True, "success"
-            return False, f"Unknown: {response.text[:100]}"
+
+            # account_invites অথবা যেকোনো success response
+            if data.get("account_invites") is not None:
+                if len(data.get("account_invites", [])) > 0:
+                    return True, "success"
+                else:
+                    return False, f"❌ Invite হয়নি: {response.text[:100]}"
+
+            # অন্য যেকোনো 200 response — success ধরো
+            return True, "success"
+
         elif response.status_code in [401, 403]:
             return False, "token_expired"
         elif response.status_code == 409:
             return False, "already_invited"
         else:
             return False, f"Error {response.status_code}: {response.text[:150]}"
+
     except Exception as e:
         return False, f"Error: {str(e)}"
 
@@ -204,10 +221,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if not access_token:
-        await update.message.reply_text("❌ Token নেই!\n`/token` দিয়ে token দাও।", parse_mode="Markdown")
+        await update.message.reply_text(
+            "❌ Token নেই!\n`/token` দিয়ে token দাও।",
+            parse_mode="Markdown"
+        )
         return
 
-    await update.message.reply_text(f"⏳ `{text}` এ invitation পাঠাচ্ছি...", parse_mode="Markdown")
+    await update.message.reply_text(
+        f"⏳ `{text}` এ invitation পাঠাচ্ছি...",
+        parse_mode="Markdown"
+    )
 
     success, message = send_invite(text, access_token, workspace)
 
@@ -217,14 +240,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         remaining = MAX_MEMBERS - count
         reply = f"✅ *Done!*\n📧 {text}\n👥 {count}/{MAX_MEMBERS}"
         if remaining == 0:
-            reply += f"\n\n⚠️ *Workspace ভরে গেছে!*"
+            reply += f"\n\n⚠️ *Workspace ভরে গেছে!* নতুন workspace বানাও।"
         elif remaining <= 2:
             reply += f"\n⚠️ মাত্র {remaining} জন বাকি!"
         await update.message.reply_text(reply, parse_mode="Markdown")
 
     elif message == "token_expired":
         context.bot_data["access_token"] = ""
-        await update.message.reply_text("❌ Token expire!\n`/token` দিয়ে নতুন token দাও।", parse_mode="Markdown")
+        await update.message.reply_text(
+            "❌ Token expire!\n\n"
+            "chatgpt.com/api/auth/session খোলো → `/token` → paste → `/done`",
+            parse_mode="Markdown"
+        )
     elif message == "already_invited":
         await update.message.reply_text("⚠️ এই email আগেই invite করা হয়েছে!")
     else:
