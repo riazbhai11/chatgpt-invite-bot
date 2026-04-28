@@ -40,7 +40,7 @@ def send_invite(email: str, access_token: str, workspace_id: str) -> tuple:
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Accept": "*/*",
         "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
+        
         "Origin": "https://chatgpt.com",
         "Referer": "https://chatgpt.com/",
         "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
