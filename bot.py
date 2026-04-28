@@ -1,4 +1,6 @@
 import os
+import re
+import json
 import requests
 import logging
 from telegram import Update
@@ -7,35 +9,63 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
-SESSION_TOKEN = os.environ.get("SESSION_TOKEN", "")
 WORKSPACE_ID = os.environ.get("WORKSPACE_ID", "3f5319e9-360c-4c01-99ce-41a88f49634e")
 
 
-def get_access_token(session_token: str) -> str:
-    """Session token দিয়ে নতুন access token নাও।"""
+def extract_token(text: str) -> dict:
+    """JSON থেকে accessToken এবং sessionToken বের করো।"""
+    result = {}
+    try:
+        data = json.loads(text)
+        if "accessToken" in data:
+            result["accessToken"] = data["accessToken"]
+        if "sessionToken" in data:
+            result["sessionToken"] = data["sessionToken"]
+        if "account" in data and "id" in data["account"]:
+            result["workspaceId"] = data["account"]["id"]
+    except:
+        # JSON parse না হলে regex দিয়ে try করো
+        at = re.search(r'"accessToken"\s*:\s*"([^"]+)"', text)
+        st = re.search(r'"sessionToken"\s*:\s*"([^"]+)"', text)
+        wi = re.search(r'"id"\s*:\s*"([a-f0-9-]{36})"', text)
+        if at:
+            result["accessToken"] = at.group(1)
+        if st:
+            result["sessionToken"] = st.group(1)
+        if wi:
+            result["workspaceId"] = wi.group(1)
+    return result
+
+
+def get_access_token_from_session(session_token: str) -> str:
     try:
         response = requests.get(
             "https://chatgpt.com/api/auth/session",
             cookies={"__Secure-next-auth.session-token": session_token},
             headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                 "Referer": "https://chatgpt.com/",
             },
             timeout=30
         )
         data = response.json()
         return data.get("accessToken", "")
-    except Exception as e:
-        logging.error(f"Token refresh error: {e}")
+    except:
         return ""
 
 
-def send_invite(email: str, session_token: str, workspace_id: str) -> tuple:
-    # প্রতিবার নতুন access token নাও
-    access_token = get_access_token(session_token)
+def send_invite(email: str, context_data: dict, workspace_id: str) -> tuple:
+    # accessToken সরাসরি আছে কিনা দেখো
+    access_token = context_data.get("access_token", "")
+
+    # না থাকলে session token দিয়ে নাও
+    if not access_token:
+        session_token = context_data.get("session_token", "")
+        if session_token:
+            access_token = get_access_token_from_session(session_token)
 
     if not access_token:
-        return False, "Session token দিয়ে access token নেওয়া যায়নি! `/setsession` দিয়ে নতুন session token দাও।"
+        return False, "Token নেই! `/settoken` দিয়ে session page-এর পুরো text পাঠাও।"
 
     url = f"https://chatgpt.com/backend-api/accounts/{workspace_id}/invites"
 
@@ -59,48 +89,65 @@ def send_invite(email: str, session_token: str, workspace_id: str) -> tuple:
         logging.info(f"Status: {response.status_code} | Response: {response.text[:300]}")
 
         if response.status_code in [200, 201]:
-            return True, "Invitation সফলভাবে পাঠানো হয়েছে! ✅"
+            return True, "✅ Invitation পাঠানো হয়েছে!"
         elif response.status_code == 401:
-            return False, "Session expire হয়েছে! `/setsession` দিয়ে নতুন session token দাও।"
+            return False, "Token expire! আবার `/settoken` দিয়ে নতুন token দাও।"
         elif response.status_code == 409:
             return False, "এই email আগেই invite করা হয়েছে!"
-        elif response.status_code == 403:
-            return False, f"403 Forbidden: {response.text[:100]}"
         else:
-            return False, f"Error {response.status_code}: {response.text[:200]}"
+            return False, f"Error {response.status_code}: {response.text[:150]}"
     except Exception as e:
-        return False, f"Connection error: {str(e)}"
+        return False, f"Error: {str(e)}"
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 *ChatGPT Invitation Bot*\n\n"
-        "Client-এর email পাঠাও → Invitation চলে যাবে!\n\n"
-        "⚙️ `/setsession TOKEN` - Session token set করো\n"
-        "📊 `/status` - Bot status চেক করো",
+        "📧 Client email দাও → Invitation যাবে!\n\n"
+        "🔑 `/settoken` - Token set করো\n"
+        "📊 `/status` - Status দেখো\n\n"
+        "*Token set করতে:*\n"
+        "chatgpt.com/api/auth/session খোলো → সব text copy করো → `/settoken` দিয়ে paste করো",
         parse_mode="Markdown"
     )
 
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    token = context.bot_data.get("session_token", SESSION_TOKEN)
-    has_token = "✅ Session token আছে" if token else "❌ Session token নেই"
+    has_token = "✅ আছে" if context.bot_data.get("access_token") or context.bot_data.get("session_token") else "❌ নেই"
+    workspace = context.bot_data.get("workspace_id", WORKSPACE_ID)
     await update.message.reply_text(
-        f"*Bot Status*\n\n"
-        f"{has_token}\n"
-        f"Workspace: `{WORKSPACE_ID}`",
+        f"*Bot Status*\n\nToken: {has_token}\nWorkspace: `{workspace}`",
         parse_mode="Markdown"
     )
 
 
-async def set_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def set_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("Usage: `/setsession YOUR_SESSION_TOKEN`", parse_mode="Markdown")
+        await update.message.reply_text(
+            "chatgpt.com/api/auth/session এর পুরো text copy করে এভাবে দাও:\n`/settoken {পুরো text}`",
+            parse_mode="Markdown"
+        )
         return
 
-    token = context.args[0]
-    context.bot_data["session_token"] = token
-    await update.message.reply_text("✅ Session token update হয়েছে!")
+    raw = " ".join(context.args)
+    tokens = extract_token(raw)
+
+    if not tokens:
+        await update.message.reply_text("❌ Token খুঁজে পাইনি! পুরো JSON text দাও।")
+        return
+
+    if "accessToken" in tokens:
+        context.bot_data["access_token"] = tokens["accessToken"]
+    if "sessionToken" in tokens:
+        context.bot_data["session_token"] = tokens["sessionToken"]
+    if "workspaceId" in tokens:
+        context.bot_data["workspace_id"] = tokens["workspaceId"]
+
+    await update.message.reply_text(
+        f"✅ Token set হয়েছে!\n"
+        f"Workspace: `{tokens.get('workspaceId', WORKSPACE_ID)}`",
+        parse_mode="Markdown"
+    )
 
 
 async def handle_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -110,18 +157,18 @@ async def handle_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Valid email দাও!\nExample: client@gmail.com")
         return
 
-    token = context.bot_data.get("session_token", SESSION_TOKEN)
+    workspace = context.bot_data.get("workspace_id", WORKSPACE_ID)
 
-    if not token:
+    if not context.bot_data.get("access_token") and not context.bot_data.get("session_token"):
         await update.message.reply_text(
-            "❌ Session token নেই!\n`/setsession YOUR_TOKEN` দিয়ে set করো।",
+            "❌ Token নেই!\n`/settoken` দিয়ে token দাও।",
             parse_mode="Markdown"
         )
         return
 
     await update.message.reply_text(f"⏳ `{text}` এ invitation পাঠাচ্ছি...", parse_mode="Markdown")
 
-    success, message = send_invite(text, token, WORKSPACE_ID)
+    success, message = send_invite(text, context.bot_data, workspace)
 
     if success:
         await update.message.reply_text(f"✅ *Done!*\n📧 {text}", parse_mode="Markdown")
@@ -133,7 +180,7 @@ def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("status", status))
-    app.add_handler(CommandHandler("setsession", set_session))
+    app.add_handler(CommandHandler("settoken", set_token))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_email))
 
     print("🤖 Bot চালু হয়েছে!")
