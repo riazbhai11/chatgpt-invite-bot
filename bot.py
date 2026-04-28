@@ -6,42 +6,65 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8706475764:AAFqwUOSrXua5LhwwDh0OpTAj-Swb9CWL5c")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 ACCESS_TOKEN = os.environ.get("ACCESS_TOKEN", "")
 WORKSPACE_ID = os.environ.get("WORKSPACE_ID", "3f5319e9-360c-4c01-99ce-41a88f49634e")
 
 
 def send_invite(email: str, access_token: str, workspace_id: str) -> tuple:
-    url = f"https://chatgpt.com/backend-api/organizations/{workspace_id}/invites"
-    
+    # Try multiple endpoints
+    endpoints = [
+        {
+            "url": f"https://chatgpt.com/backend-api/organizations/{workspace_id}/invites",
+            "payload": {"email": email, "role": "member"}
+        },
+        {
+            "url": "https://chatgpt.com/backend-api/invite/batch",
+            "payload": {"emails": [email], "role": "member", "workspace_id": workspace_id}
+        },
+        {
+            "url": f"https://chatgpt.com/backend-api/organizations/{workspace_id}/members/invite",
+            "payload": {"email": email, "role": "member"}
+        },
+    ]
+
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Origin": "https://chatgpt.com",
         "Referer": "https://chatgpt.com/",
     }
-    
-    payload = {
-        "email": email,
-        "role": "member"
-    }
-    
-    try:
-        response = requests.post(url, json=payload, headers=headers, timeout=30)
-        
-        if response.status_code in [200, 201]:
-            return True, "Invitation সফলভাবে পাঠানো হয়েছে! ✅"
-        elif response.status_code == 401:
-            return False, "Token expire হয়েছে! নতুন token দাও।"
-        elif response.status_code == 409:
-            return False, "এই email আগেই invite করা হয়েছে!"
-        elif response.status_code == 422:
-            return False, "Invalid email address!"
-        else:
-            return False, f"Error {response.status_code}: {response.text[:200]}"
-    except Exception as e:
-        return False, f"Connection error: {str(e)}"
+
+    for endpoint in endpoints:
+        try:
+            response = requests.post(
+                endpoint["url"],
+                json=endpoint["payload"],
+                headers=headers,
+                timeout=30
+            )
+
+            logging.info(f"URL: {endpoint['url']} | Status: {response.status_code} | Response: {response.text[:200]}")
+
+            if response.status_code in [200, 201]:
+                return True, "Invitation সফলভাবে পাঠানো হয়েছে! ✅"
+            elif response.status_code == 401:
+                return False, "Token expire হয়েছে! `/settoken` দিয়ে নতুন token দাও।"
+            elif response.status_code == 409:
+                return False, "এই email আগেই invite করা হয়েছে!"
+            elif response.status_code == 422:
+                return False, f"Invalid request: {response.text[:100]}"
+            elif response.status_code == 404:
+                continue  # Try next endpoint
+            else:
+                continue
+
+        except Exception as e:
+            logging.error(f"Error: {e}")
+            continue
+
+    return False, f"সব endpoint-এ 404। Deploy logs দেখো কোন URL কাজ করছে।"
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -69,7 +92,7 @@ async def set_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("Usage: `/settoken YOUR_ACCESS_TOKEN`", parse_mode="Markdown")
         return
-    
+
     token = context.args[0]
     context.bot_data["access_token"] = token
     await update.message.reply_text("✅ Token update হয়েছে!")
@@ -77,21 +100,24 @@ async def set_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
-    
+
     if "@" not in text or "." not in text.split("@")[-1]:
         await update.message.reply_text("❌ Valid email দাও!\nExample: client@gmail.com")
         return
-    
+
     token = context.bot_data.get("access_token", ACCESS_TOKEN)
-    
+
     if not token:
-        await update.message.reply_text("❌ Access token নেই! `/settoken YOUR_TOKEN` দিয়ে set করো।")
+        await update.message.reply_text(
+            "❌ Access token নেই!\n`/settoken YOUR_TOKEN` দিয়ে set করো।",
+            parse_mode="Markdown"
+        )
         return
-    
+
     await update.message.reply_text(f"⏳ `{text}` এ invitation পাঠাচ্ছি...", parse_mode="Markdown")
-    
+
     success, message = send_invite(text, token, WORKSPACE_ID)
-    
+
     if success:
         await update.message.reply_text(f"✅ *Done!*\n📧 {text}", parse_mode="Markdown")
     else:
@@ -104,7 +130,7 @@ def main():
     app.add_handler(CommandHandler("status", status))
     app.add_handler(CommandHandler("settoken", set_token))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_email))
-    
+
     print("🤖 Bot চালু হয়েছে!")
     app.run_polling()
 
