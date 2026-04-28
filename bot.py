@@ -33,22 +33,41 @@ def extract_from_json(text: str) -> dict:
 
 def send_invite(email: str, access_token: str, workspace_id: str) -> tuple:
     url = f"https://chatgpt.com/backend-api/accounts/{workspace_id}/invites"
+    
+    # Full browser-like headers
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
         "Origin": "https://chatgpt.com",
         "Referer": "https://chatgpt.com/",
+        "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin",
+        "Oai-Language": "en-US",
+        "Oai-Device-Id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
     }
+    
     payload = {
         "email_addresses": [email],
         "resend_emails": True,
         "role": "standard-user",
         "seat_type": "default"
     }
+    
+    session = requests.Session()
+    session.headers.update(headers)
+    
     try:
-        response = requests.post(url, json=payload, headers=headers, timeout=30)
+        response = session.post(url, json=payload, timeout=30)
         logging.info(f"Status: {response.status_code} | Response: {response.text[:300]}")
+        
         if response.status_code in [200, 201]:
             data = response.json()
             if data.get("errored_emails"):
@@ -95,26 +114,24 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def token_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Token collection mode শুরু করো।"""
     context.user_data["collecting_token"] = True
     context.user_data["token_parts"] = []
     await update.message.reply_text(
         "🔑 *Token Mode চালু!*\n\n"
-        "এখন chatgpt.com/api/auth/session এর পুরো text paste করো।\n"
-        "২ ভাগে আসলেও চলবে — সব parts আসার পর `/done` দাও।",
+        "chatgpt.com/api/auth/session এর পুরো text paste করো।\n"
+        "শেষ হলে `/done` দাও।",
         parse_mode="Markdown"
     )
 
 
 async def token_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Token collection শেষ করো।"""
     if not context.user_data.get("collecting_token"):
         await update.message.reply_text("আগে `/token` দাও!", parse_mode="Markdown")
         return
 
     parts = context.user_data.get("token_parts", [])
     if not parts:
-        await update.message.reply_text("❌ কোনো text পাইনি! আবার `/token` দিয়ে শুরু করো।")
+        await update.message.reply_text("❌ কোনো text পাইনি!")
         return
 
     combined = "".join(parts)
@@ -129,16 +146,12 @@ async def token_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.bot_data["workspace_id"] = tokens["workspaceId"]
         await update.message.reply_text(
             f"✅ *Token set হয়েছে!*\n"
-            f"Workspace: `{tokens.get('workspaceId', context.bot_data.get('workspace_id', WORKSPACE_ID))}`\n\n"
+            f"Workspace: `{tokens.get('workspaceId', WORKSPACE_ID)}`\n\n"
             f"এখন email দাও!",
             parse_mode="Markdown"
         )
     else:
-        await update.message.reply_text(
-            "❌ Token খুঁজে পাইনি!\n"
-            "chatgpt.com/api/auth/session এর পুরো text দিয়েছ তো?\n"
-            "আবার `/token` দিয়ে try করো।"
-        )
+        await update.message.reply_text("❌ Token খুঁজে পাইনি! আবার `/token` দিয়ে try করো।")
 
 
 async def set_workspace(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -149,26 +162,25 @@ async def set_workspace(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.bot_data["workspace_id"] = workspace_id
     context.bot_data["member_count"] = 0
     await update.message.reply_text(
-        f"✅ নতুন Workspace set!\nID: `{workspace_id}`\nCount reset হয়েছে।",
+        f"✅ নতুন Workspace!\nID: `{workspace_id}`\nCount reset।",
         parse_mode="Markdown"
     )
 
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.bot_data["member_count"] = 0
-    await update.message.reply_text("✅ Member count reset হয়েছে!")
+    await update.message.reply_text("✅ Count reset!")
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
 
-    # Token collection mode চলছে?
+    # Token collection mode
     if context.user_data.get("collecting_token"):
         context.user_data["token_parts"].append(text)
         parts_count = len(context.user_data["token_parts"])
         await update.message.reply_text(
-            f"✅ Part {parts_count} পেয়েছি!\n"
-            f"আরো আছে? paste করো। শেষ হলে `/done` দাও।",
+            f"✅ Part {parts_count} পেয়েছি! আরো থাকলে paste করো। শেষ হলে `/done` দাও।",
             parse_mode="Markdown"
         )
         return
@@ -184,8 +196,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if count >= MAX_MEMBERS:
         await update.message.reply_text(
-            f"⚠️ Workspace ভরে গেছে! ({MAX_MEMBERS}/{MAX_MEMBERS})\n\n"
-            f"নতুন workspace বানাও:\n"
+            f"⚠️ Workspace ভরে গেছে!\n\n"
             f"1️⃣ `/setworkspace NEW_ID`\n"
             f"2️⃣ `/token`",
             parse_mode="Markdown"
@@ -193,10 +204,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if not access_token:
-        await update.message.reply_text(
-            "❌ Token নেই!\n`/token` দিয়ে token দাও।",
-            parse_mode="Markdown"
-        )
+        await update.message.reply_text("❌ Token নেই!\n`/token` দিয়ে token দাও।", parse_mode="Markdown")
         return
 
     await update.message.reply_text(f"⏳ `{text}` এ invitation পাঠাচ্ছি...", parse_mode="Markdown")
@@ -207,21 +215,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         count += 1
         context.bot_data["member_count"] = count
         remaining = MAX_MEMBERS - count
-
         reply = f"✅ *Done!*\n📧 {text}\n👥 {count}/{MAX_MEMBERS}"
         if remaining == 0:
-            reply += f"\n\n⚠️ *Workspace ভরে গেছে!* নতুন workspace বানাও।"
+            reply += f"\n\n⚠️ *Workspace ভরে গেছে!*"
         elif remaining <= 2:
             reply += f"\n⚠️ মাত্র {remaining} জন বাকি!"
-
         await update.message.reply_text(reply, parse_mode="Markdown")
 
     elif message == "token_expired":
         context.bot_data["access_token"] = ""
-        await update.message.reply_text(
-            "❌ Token expire!\n`/token` দিয়ে নতুন token দাও।",
-            parse_mode="Markdown"
-        )
+        await update.message.reply_text("❌ Token expire!\n`/token` দিয়ে নতুন token দাও।", parse_mode="Markdown")
     elif message == "already_invited":
         await update.message.reply_text("⚠️ এই email আগেই invite করা হয়েছে!")
     else:
