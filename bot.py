@@ -12,21 +12,7 @@ WORKSPACE_ID = os.environ.get("WORKSPACE_ID", "3f5319e9-360c-4c01-99ce-41a88f496
 
 
 def send_invite(email: str, access_token: str, workspace_id: str) -> tuple:
-    # Try multiple endpoints
-    endpoints = [
-        {
-            "url": f"https://chatgpt.com/backend-api/organizations/{workspace_id}/invites",
-            "payload": {"email": email, "role": "member"}
-        },
-        {
-            "url": "https://chatgpt.com/backend-api/invite/batch",
-            "payload": {"emails": [email], "role": "member", "workspace_id": workspace_id}
-        },
-        {
-            "url": f"https://chatgpt.com/backend-api/organizations/{workspace_id}/members/invite",
-            "payload": {"email": email, "role": "member"}
-        },
-    ]
+    url = f"https://chatgpt.com/backend-api/accounts/{workspace_id}/invites"
 
     headers = {
         "Authorization": f"Bearer {access_token}",
@@ -36,35 +22,29 @@ def send_invite(email: str, access_token: str, workspace_id: str) -> tuple:
         "Referer": "https://chatgpt.com/",
     }
 
-    for endpoint in endpoints:
-        try:
-            response = requests.post(
-                endpoint["url"],
-                json=endpoint["payload"],
-                headers=headers,
-                timeout=30
-            )
+    payload = {
+        "email_addresses": [email],
+        "resend_emails": True,
+        "role": "standard-user",
+        "seat_type": "default"
+    }
 
-            logging.info(f"URL: {endpoint['url']} | Status: {response.status_code} | Response: {response.text[:200]}")
+    try:
+        response = requests.post(url, json=payload, headers=headers, timeout=30)
+        logging.info(f"Status: {response.status_code} | Response: {response.text[:300]}")
 
-            if response.status_code in [200, 201]:
-                return True, "Invitation সফলভাবে পাঠানো হয়েছে! ✅"
-            elif response.status_code == 401:
-                return False, "Token expire হয়েছে! `/settoken` দিয়ে নতুন token দাও।"
-            elif response.status_code == 409:
-                return False, "এই email আগেই invite করা হয়েছে!"
-            elif response.status_code == 422:
-                return False, f"Invalid request: {response.text[:100]}"
-            elif response.status_code == 404:
-                continue  # Try next endpoint
-            else:
-                continue
-
-        except Exception as e:
-            logging.error(f"Error: {e}")
-            continue
-
-    return False, f"সব endpoint-এ 404। Deploy logs দেখো কোন URL কাজ করছে।"
+        if response.status_code in [200, 201]:
+            return True, "Invitation সফলভাবে পাঠানো হয়েছে! ✅"
+        elif response.status_code == 401:
+            return False, "Token expire হয়েছে! `/settoken` দিয়ে নতুন token দাও।"
+        elif response.status_code == 409:
+            return False, "এই email আগেই invite করা হয়েছে!"
+        elif response.status_code == 422:
+            return False, f"Invalid request: {response.text[:100]}"
+        else:
+            return False, f"Error {response.status_code}: {response.text[:200]}"
+    except Exception as e:
+        return False, f"Connection error: {str(e)}"
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
